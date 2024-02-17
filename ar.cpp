@@ -1,22 +1,26 @@
 #include <cstring>
 #include <string>
+#include <vector>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 
-const size_t SZ_HEADER = 14;
-const size_t SZ_SZ_BLOCK = 4;
-const size_t SZ_SZ_JSON = 5;
+typedef uint32_t SZ_T;
+typedef std::vector<char> BUF_T;
 
-size_t buf_lookup_lf(const char* buf, size_t idx, size_t max) {
+const SZ_T SZ_HEADER = 14;
+const SZ_T SZ_SZ_BLOCK = 4;
+
+SZ_T buf_lookup_lf(BUF_T& buf, SZ_T idx, SZ_T max) {
     while ((idx < max) && (buf[idx] != '\n') ) {
         idx = idx + 1;
     }
     return idx;
 }
 
-size_t buf_insert(char* buf, size_t idx, const char* ext, size_t sz) {
-    memcpy(&buf[idx], ext, sz);
+SZ_T buf_insert(BUF_T& buf, SZ_T idx, const std::string& ext) {
+    SZ_T sz = ext.size();
+    memcpy(&buf[idx], ext.data(), sz);
     return idx + sz;
 }
 
@@ -30,54 +34,56 @@ void scatter(const std::filesystem::path& fn) {
     std::filesystem::create_directory(dn);
 
     std::ifstream fis;
-    fis.open(fn, std::ios::binary | std::ios::in);
+    fis.open(fn, std::ios::binary);
     if (!fis.is_open()) {
         std::cout << "ERROR: Can't open file " << fn << std::endl;
         return;
     }
 
-    char header[SZ_HEADER];
-    fis.read(header, SZ_HEADER);
+    BUF_T buf_header;
+    buf_header.resize(SZ_HEADER);
+    fis.read(&buf_header[0], SZ_HEADER);
 
-    if (strncmp(header, "C2AR", SZ_HEADER) != 0) {
+    if (strncmp(&buf_header[0], "C2AR", SZ_HEADER) != 0) {
         std::cout << "ERROR: invalid file format" << std::endl;
         return;
     }
 
-    std::ofstream  fosi;
-    fosi.open(dn / "index.txt", std::ios::out);
+    std::ofstream fosi;
+    fosi.open(dn / "index.txt");
 
     fosi << "header.bin" << std::endl;
 
     std::ofstream fos;
-    fos.open(dn / "header.bin", std::ios::binary | std::ios::out);
-    fos.write(header, SZ_HEADER);
+    fos.open(dn / "header.bin", std::ios::binary);
+    fos.write(&buf_header[0], SZ_HEADER);
     fos.close();
 
     int no = 1;
     while (fis.peek() != EOF) {
-        size_t sz = 0;
-        fis.read((char*) &sz, SZ_SZ_BLOCK);
+        SZ_T sz = 0;
+        fis.read((char *) &sz, SZ_SZ_BLOCK);
 
-        char buf[sz];
-        fis.read(buf, sz);
+        BUF_T buf;
+        buf.resize(sz);
+        fis.read(&buf[0], sz);
 
-        size_t idx_1 = buf_lookup_lf(buf, 0, sz) + 1;
+        SZ_T idx_1 = buf_lookup_lf(buf, 0, sz) + 1;
         if (idx_1 != 1) {
             std::cout << "ERROR: Invalid file format (at " << no << " part)" << std::endl;
             break;
         }
-        size_t idx_2 = buf_lookup_lf(buf, idx_1 + 1, sz) + 1;
+        SZ_T idx_2 = buf_lookup_lf(buf, idx_1 + 1, sz) + 1;
         if (idx_2 > sz) {
             std::cout << "ERROR: Invalid file format (at " << no << " part)" << std::endl;
             break;
         }
 
-        std::string nx = std::string(&buf[idx_1], idx_2 - idx_1 - 1)  + ".json";
+        std::string nx = std::string(&buf[idx_1], idx_2 - idx_1 - 1);
 
         fosi << nx << std::endl;
 
-        fos.open(dn / nx, std::ios::binary | std::ios::out);
+        fos.open(dn / nx, std::ios::binary);
         fos.write(&buf[idx_2], sz - idx_2);
         fos.close();
 
@@ -97,40 +103,42 @@ void gather(const std::filesystem::path& dn) {
     }
 
     std::ofstream fos;
-    fos.open(fn,std::ios::binary | std::ios::out);
+    fos.open(fn,std::ios::binary);
 
     std::ifstream fisi;
-    fisi.open(dn / "index.txt", std::ios::in);
+    fisi.open(dn / "index.txt");
 
     std::ifstream fis;
 
     std::string l;
     while(std::getline(fisi, l)) {
-        size_t sz = std::filesystem::file_size(dn / l);
-        fis.open(dn / l, std::ios::binary | std::ios::in);
+        SZ_T sz = std::filesystem::file_size(dn / l);
+        fis.open(dn / l, std::ios::binary);
 
         if (l.ends_with(".bin")) {
-            char buf[sz];
+            BUF_T buf;
+            buf.resize(sz);
 
-            fis.read(buf, sz);
+            fis.read(&buf[0], sz);
             fis.close();
 
-            fos.write(buf, sz);
+            fos.write(&buf[0], sz);
         } else {
-            size_t lz = l.size() - SZ_SZ_JSON;
-            size_t xz = lz + sz + 2;
+            sz = sz + l.size() + 2;
 
-            char buf[xz];
-            size_t idx = 0;
-            idx = buf_insert(buf, idx, "\n", 1);
-            idx = buf_insert(buf, idx, l.c_str(), lz);
-            idx = buf_insert(buf, idx, "\n", 1);
+            BUF_T buf;
+            buf.resize(sz);
+
+            SZ_T idx = 0;
+            idx = buf_insert(buf, idx, "\n");
+            idx = buf_insert(buf, idx, l);
+            idx = buf_insert(buf, idx, "\n");
 
             fis.read(&buf[idx], sz);
             fis.close();
 
-            fos.write((char*) &xz, SZ_SZ_BLOCK);
-            fos.write(buf, xz);
+            fos.write((char*) &sz, SZ_SZ_BLOCK);
+            fos.write(&buf[0], sz);
         }
     }
 
